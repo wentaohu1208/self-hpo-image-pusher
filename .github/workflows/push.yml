@@ -7,6 +7,10 @@ on:
         description: "Only the first N rows of images.tsv (0 = all)"
         required: false
         default: "0"
+      parallel:
+        description: "Images copied at once per job"
+        required: false
+        default: "4"
 
 permissions:
   contents: read
@@ -65,6 +69,8 @@ jobs:
           ANON_CFG: ${{ runner.temp }}/anon
           AUTH_CFG: ${{ runner.temp }}/auth
           LIMIT: ${{ inputs.limit }}
+          PARALLEL: ${{ inputs.parallel }}
+          CRANE_JOBS: "8"
         run: bash push.sh "${{ matrix.job }}" "$JOBS" "${LIMIT:-0}"
 
       - name: Upload results
