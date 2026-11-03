@@ -11,10 +11,10 @@ on:
         description: "Images copied at once per job"
         required: false
         default: "8"
-  schedule:
-    # Resume after jobs hit the time limit; the finish job disables the workflow once every image
-    # is mirrored (re-enable with `gh workflow enable push.yml`).
-    - cron: "17 */6 * * *"
+      round:
+        description: "Re-run counter: a full run that leaves gaps dispatches the next round"
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -75,6 +75,7 @@ jobs:
           LIMIT: ${{ inputs.limit || '0' }}
           PARALLEL: ${{ inputs.parallel || '8' }}
           CRANE_JOBS: "8"
+          BUDGET_MIN: "300"
         run: bash push.sh "${{ matrix.job }}" "$JOBS" "$LIMIT"
 
       - name: Upload results
@@ -85,16 +86,22 @@ jobs:
           path: results.tsv
           if-no-files-found: ignore
 
-  finish:
-    # Every job succeeded on the full list, so every image is in the mirror: stop the schedule.
-    name: disable the schedule
+  next-round:
+    # Some job failed or stopped at its time budget: dispatch another run, which skips what is
+    # already mirrored. Not after a manual cancel, and at most 8 rounds so that permanent failures
+    # cannot loop forever. Runs dispatched with GITHUB_TOKEN via workflow_dispatch do start.
+    name: queue the next round
     needs: copy
-    if: ${{ success() && (inputs.limit || '0') == '0' }}
+    if: ${{ !cancelled() && needs.copy.result != 'success' && (inputs.limit || '0') == '0' && fromJSON(inputs.round || '0') < 8 }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
-      - name: Disable this workflow
+      - name: Dispatch push.yml again
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api --method PUT "repos/$GITHUB_REPOSITORY/actions/workflows/push.yml/disable"
+          ROUND: ${{ inputs.round || '0' }}
+          PARALLEL: ${{ inputs.parallel || '8' }}
+        run: |
+          gh workflow run push.yml --repo "$GITHUB_REPOSITORY" \
+            -f round="$((ROUND + 1))" -f parallel="$PARALLEL"

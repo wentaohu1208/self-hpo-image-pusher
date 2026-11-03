@@ -14,9 +14,9 @@ China without direct Docker Hub access can `docker pull` them over a domestic li
   their share with `crane copy --platform linux/amd64`; images already mirrored are skipped, so
   re-running the workflow only fills gaps. Anonymous Docker Hub pulls are tried first, the account
   login on retries.
-- A schedule (every 6 hours) re-runs the workflow, which resumes the images left when jobs hit
-  their time limit. Once a full run succeeds in every job, the `finish` job disables the workflow;
-  `gh workflow enable push.yml` turns it back on.
+- A job stops starting copies after 300 minutes (its limit is 350). When a full run leaves gaps
+  (failed copies or rows left at the budget), its `next-round` job dispatches the workflow again
+  with `round` + 1, at most 8 rounds; a manual cancel stops the chain.
 
 Secrets: `ALIYUN_REGISTRY`, `ALIYUN_NAME_SPACE`, `ALIYUN_REGISTRY_USER`, `ALIYUN_REGISTRY_PASSWORD`,
 optional `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
