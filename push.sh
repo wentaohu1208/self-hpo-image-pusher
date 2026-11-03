@@ -5,13 +5,13 @@
 #   rows of images.tsv (for trial runs).
 # Env: ALIYUN_REGISTRY, ALIYUN_NAME_SPACE; ANON_CFG and AUTH_CFG are docker config dirs that both
 #   hold the ACR login, AUTH_CFG also the Docker Hub login (used on retries, e.g. after an anonymous
-#   rate limit); PARALLEL images copied at once (default 4: the upload to China is slow per
+#   rate limit); PARALLEL images copied at once (default 8: the upload to China is slow per
 #   connection, so concurrency multiplies throughput); CRANE_JOBS concurrent blobs per image (8).
 # Images already in the mirror are skipped, so re-running only fills the gaps.
 set -uo pipefail
 
 JOB=$1 JOBS=$2 LIMIT=${3:-0}
-PARALLEL=${PARALLEL:-4} CRANE_JOBS=${CRANE_JOBS:-8}
+PARALLEL=${PARALLEL:-8} CRANE_JOBS=${CRANE_JOBS:-8}
 PREFIX="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE"
 
 copy_one() {  # src path: copy one image and append its result line

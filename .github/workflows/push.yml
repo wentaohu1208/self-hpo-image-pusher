@@ -10,7 +10,11 @@ on:
       parallel:
         description: "Images copied at once per job"
         required: false
-        default: "4"
+        default: "8"
+  schedule:
+    # Resume after jobs hit the time limit; the finish job disables the workflow once every image
+    # is mirrored (re-enable with `gh workflow enable push.yml`).
+    - cron: "17 */6 * * *"
 
 permissions:
   contents: read
@@ -68,10 +72,10 @@ jobs:
         env:
           ANON_CFG: ${{ runner.temp }}/anon
           AUTH_CFG: ${{ runner.temp }}/auth
-          LIMIT: ${{ inputs.limit }}
-          PARALLEL: ${{ inputs.parallel }}
+          LIMIT: ${{ inputs.limit || '0' }}
+          PARALLEL: ${{ inputs.parallel || '8' }}
           CRANE_JOBS: "8"
-        run: bash push.sh "${{ matrix.job }}" "$JOBS" "${LIMIT:-0}"
+        run: bash push.sh "${{ matrix.job }}" "$JOBS" "$LIMIT"
 
       - name: Upload results
         if: always()
@@ -80,3 +84,17 @@ jobs:
           name: results-${{ matrix.job }}
           path: results.tsv
           if-no-files-found: ignore
+
+  finish:
+    # Every job succeeded on the full list, so every image is in the mirror: stop the schedule.
+    name: disable the schedule
+    needs: copy
+    if: ${{ success() && (inputs.limit || '0') == '0' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Disable this workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/$GITHUB_REPOSITORY/actions/workflows/push.yml/disable"

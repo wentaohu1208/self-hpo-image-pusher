@@ -10,10 +10,13 @@ China without direct Docker Hub access can `docker pull` them over a domestic li
   `python -m rsicodingagent.data_prep.acr map --input DIR/images-dockerhub.txt --output images.tsv`.
   Buckets are `<namespace>-<shard>` (shard from the reference's sha256), which keeps the 12
   repositories far below the personal edition's 300.
-- `push.sh` / `.github/workflows/push.yml`: 40 jobs (20 at a time) copy their share with
-  `crane copy --platform linux/amd64`; images already mirrored are skipped, so re-running the
-  workflow only fills gaps. Anonymous Docker Hub pulls are tried first, the account login on
-  retries.
+- `push.sh` / `.github/workflows/push.yml`: 40 jobs (20 at a time, 8 images at once per job) copy
+  their share with `crane copy --platform linux/amd64`; images already mirrored are skipped, so
+  re-running the workflow only fills gaps. Anonymous Docker Hub pulls are tried first, the account
+  login on retries.
+- A schedule (every 6 hours) re-runs the workflow, which resumes the images left when jobs hit
+  their time limit. Once a full run succeeds in every job, the `finish` job disables the workflow;
+  `gh workflow enable push.yml` turns it back on.
 
 Secrets: `ALIYUN_REGISTRY`, `ALIYUN_NAME_SPACE`, `ALIYUN_REGISTRY_USER`, `ALIYUN_REGISTRY_PASSWORD`,
 optional `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
