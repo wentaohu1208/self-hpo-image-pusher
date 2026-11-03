@@ -23,3 +23,6 @@ optional `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
 
 Run: `gh workflow run push.yml -f limit=10` (trial on the first 10 rows), then
 `gh workflow run push.yml` for everything. Per-job results are uploaded as `results-<job>`.
+
+`.github/workflows/copy-image.yml` copies one Docker Hub image to the namespace, e.g. the training
+image: `gh workflow run copy-image.yml -f source=slimerl/slime:v0.3.0 -f target=slime:v0.3.0`.

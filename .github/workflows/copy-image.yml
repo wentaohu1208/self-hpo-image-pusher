@@ -1,0 +1,82 @@
+name: copy-image
+
+# Copy one Docker Hub image (linux/amd64) to the ACR namespace, e.g. the training image
+# slimerl/slime:v0.3.0 -> slime:v0.3.0. Blobs already in ACR are skipped, so a rerun resumes.
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Docker Hub reference, e.g. slimerl/slime:v0.3.0"
+        required: true
+      target:
+        description: "repository:tag under the ACR namespace, e.g. slime:v0.3.0"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copy-image-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      CRANE_VERSION: v0.22.1
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_NAME_SPACE: ${{ secrets.ALIYUN_NAME_SPACE }}
+    steps:
+      - name: Install crane (pinned, checksum-verified)
+        run: |
+          base="https://github.com/google/go-containerregistry/releases/download/$CRANE_VERSION"
+          curl -fsSLO "$base/go-containerregistry_Linux_x86_64.tar.gz"
+          curl -fsSL "$base/checksums.txt" \
+            | grep ' go-containerregistry_Linux_x86_64.tar.gz$' | sha256sum -c -
+          tar -xzf go-containerregistry_Linux_x86_64.tar.gz crane
+          sudo install -m 0755 crane /usr/local/bin/crane
+          crane version
+
+      - name: Log in
+        env:
+          ALIYUN_REGISTRY_USER: ${{ secrets.ALIYUN_REGISTRY_USER }}
+          ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/anon" "$RUNNER_TEMP/auth"
+          printf '%s' "$ALIYUN_REGISTRY_PASSWORD" | DOCKER_CONFIG="$RUNNER_TEMP/anon" \
+            crane auth login "$ALIYUN_REGISTRY" -u "$ALIYUN_REGISTRY_USER" --password-stdin
+          cp "$RUNNER_TEMP/anon/config.json" "$RUNNER_TEMP/auth/config.json"
+          if [ -n "$DOCKERHUB_TOKEN" ]; then
+            printf '%s' "$DOCKERHUB_TOKEN" | DOCKER_CONFIG="$RUNNER_TEMP/auth" \
+              crane auth login index.docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+          fi
+
+      - name: Copy
+        env:
+          SOURCE: ${{ inputs.source }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          dst="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$TARGET"
+          for attempt in 1 2 3 4; do
+            cfg=$RUNNER_TEMP/anon
+            if (( attempt % 2 == 0 )); then cfg=$RUNNER_TEMP/auth; fi
+            if DOCKER_CONFIG=$cfg crane copy --jobs 16 --platform linux/amd64 \
+                "docker.io/$SOURCE" "$dst"; then
+              break
+            fi
+            if (( attempt == 4 )); then exit 1; fi
+            echo "::warning::attempt $attempt failed; retrying (finished blobs are kept)"
+            sleep $((attempt * 30))
+          done
+          # --platform only filters multi-platform indexes: verify a single-platform source too
+          platform=$(DOCKER_CONFIG=$RUNNER_TEMP/anon crane config "$dst" \
+            | jq -r '"\(.os // "?")/\(.architecture // "?")"')
+          if [ "$platform" != linux/amd64 ]; then
+            echo "::error::$SOURCE is $platform, not linux/amd64"
+            exit 1
+          fi
+          digest=$(DOCKER_CONFIG=$RUNNER_TEMP/anon crane digest "$dst")
+          echo "copied $SOURCE -> $dst ($digest)" | tee -a "$GITHUB_STEP_SUMMARY"
