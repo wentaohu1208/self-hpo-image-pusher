@@ -1,10 +1,15 @@
 name: push-images
+run-name: push-images ${{ inputs.list || 'images.tsv' }} round ${{ inputs.round || '0' }}
 
 on:
   workflow_dispatch:
     inputs:
+      list:
+        description: "Image list in the repository root: images.tsv (training pool) or benchmarks.tsv"
+        required: false
+        default: "images.tsv"
       limit:
-        description: "Only the first N rows of images.tsv (0 = all)"
+        description: "Only the first N rows of the list (0 = all)"
         required: false
         default: "0"
       parallel:
@@ -19,8 +24,10 @@ on:
 permissions:
   contents: read
 
+# One chain per list, so different lists run side by side; the training pool keeps the original
+# group name, so its runs still queue behind runs started before the list input existed.
 concurrency:
-  group: push-images
+  group: push-images${{ (inputs.list || 'images.tsv') != 'images.tsv' && format('-{0}', inputs.list) || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -72,6 +79,7 @@ jobs:
         env:
           ANON_CFG: ${{ runner.temp }}/anon
           AUTH_CFG: ${{ runner.temp }}/auth
+          LIST: ${{ inputs.list || 'images.tsv' }}
           LIMIT: ${{ inputs.limit || '0' }}
           PARALLEL: ${{ inputs.parallel || '8' }}
           CRANE_JOBS: "8"
@@ -100,8 +108,9 @@ jobs:
       - name: Dispatch push.yml again
         env:
           GH_TOKEN: ${{ github.token }}
+          LIST: ${{ inputs.list || 'images.tsv' }}
           ROUND: ${{ inputs.round || '0' }}
           PARALLEL: ${{ inputs.parallel || '8' }}
         run: |
           gh workflow run push.yml --repo "$GITHUB_REPOSITORY" \
-            -f round="$((ROUND + 1))" -f parallel="$PARALLEL"
+            -f list="$LIST" -f round="$((ROUND + 1))" -f parallel="$PARALLEL"
