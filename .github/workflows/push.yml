@@ -75,8 +75,15 @@ jobs:
               crane auth login index.docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
           fi
 
+      # Images of other registries pass through the disk; /mnt has the runner's free space.
+      - name: Stage directory
+        run: |
+          sudo mkdir -p /mnt/stage && sudo chown "$(id -u):$(id -g)" /mnt/stage
+          df -h / /mnt
+
       - name: Copy images
         env:
+          STAGE_DIR: /mnt/stage
           ANON_CFG: ${{ runner.temp }}/anon
           AUTH_CFG: ${{ runner.temp }}/auth
           LIST: ${{ inputs.list || 'images.tsv' }}

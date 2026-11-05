@@ -11,13 +11,18 @@
 #   rate limit); PARALLEL images copied at once (default 8: the upload to China is slow per
 #   connection, so concurrency multiplies throughput); CRANE_JOBS concurrent blobs per image (8);
 #   BUDGET_MIN minutes after which no new copy starts (300, below the job's 350-minute limit, so
-#   running copies can finish): the rest of the share is left for the next round.
+#   running copies can finish): the rest of the share is left for the next round; STAGE_DIR
+#   (RUNNER_TEMP) holds images of other registries while they are copied.
+# Images of other registries are pulled to STAGE_DIR first and pushed from there: copied directly,
+# each blob streamed from ghcr.io into the slow upload to ACR, and those stalled downloads broke
+# the uploads (2026-11-05: 523 of 536 ghcr.io images failed after 4 attempts, no Docker Hub one).
 # Images already in the mirror are skipped, so re-running only fills the gaps. Exits non-zero if
 # a copy failed or rows were left over.
 set -uo pipefail
 
 JOB=$1 JOBS=$2 LIMIT=${3:-0} LIST=${LIST:-images.tsv}
 PARALLEL=${PARALLEL:-8} CRANE_JOBS=${CRANE_JOBS:-8} BUDGET_MIN=${BUDGET_MIN:-300}
+STAGE_DIR=${STAGE_DIR:-${RUNNER_TEMP:-/tmp}}
 PREFIX="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE"
 if [[ ! "$LIST" =~ ^[A-Za-z0-9_.-]+\.tsv$ || ! -f "$LIST" ]]; then
   echo "::error::LIST must name a .tsv file in this directory, got '$LIST'"
@@ -33,23 +38,44 @@ source_ref() {  # reference as written in the list -> reference crane can pull
   fi
 }
 
+transfer() {  # cfg ref dst stage: copy directly, or through the (per-image) stage directory
+  local cfg=$1 ref=$2 dst=$3 stage=$4
+  if [[ -z "$stage" ]]; then
+    DOCKER_CONFIG=$cfg crane copy --jobs "$CRANE_JOBS" --platform linux/amd64 "$ref" "$dst"
+    return
+  fi
+  if [[ ! -f "$stage/pulled" ]]; then  # a finished pull is kept: retries only push again
+    rm -rf "$stage/oci"
+    DOCKER_CONFIG=$cfg crane pull --platform linux/amd64 --format oci "$ref" "$stage/oci" \
+      || return
+    touch "$stage/pulled"
+  fi
+  DOCKER_CONFIG=$cfg crane push "$stage/oci" "$dst"
+}
+
 copy_one() {  # src path: copy one image and append its result line
-  local src=$1 dst=$PREFIX/$2 attempt cfg platform log
+  local src=$1 dst=$PREFIX/$2 attempt cfg platform log ref stage=
   if DOCKER_CONFIG=$ANON_CFG crane digest "$dst" > /dev/null 2>&1; then
     printf 'SKIP\t%s\t%s\n' "$src" "$dst" >> results.tsv
     return 0
   fi
   log=$(mktemp)
+  ref=$(source_ref "$src")
+  if [[ "$ref" != docker.io/* ]] && ! stage=$(mktemp -d -p "$STAGE_DIR"); then
+    echo "::error::$src: cannot stage in $STAGE_DIR"
+    rm -f "$log"
+    printf 'FAIL\t%s\t%s\n' "$src" "$dst" >> results.tsv
+    return 0
+  fi
   for attempt in 1 2 3 4; do
     cfg=$ANON_CFG
     if (( attempt % 2 == 0 )); then cfg=$AUTH_CFG; fi
-    if DOCKER_CONFIG=$cfg crane copy --jobs "$CRANE_JOBS" --platform linux/amd64 \
-        "$(source_ref "$src")" "$dst" > "$log" 2>&1; then
+    if transfer "$cfg" "$ref" "$dst" "$stage" > "$log" 2>&1; then
       # --platform only filters multi-platform indexes: verify a single-platform source too
       platform=$(DOCKER_CONFIG=$ANON_CFG crane config "$dst" 2> /dev/null \
         | jq -r '"\(.os // "?")/\(.architecture // "?")"')
       if [ "$platform" = linux/amd64 ]; then
-        rm -f "$log"
+        rm -rf "$log" ${stage:+"$stage"}
         printf 'OK\t%s\t%s\n' "$src" "$dst" >> results.tsv
         return 0
       fi
@@ -60,7 +86,7 @@ copy_one() {  # src path: copy one image and append its result line
     echo "::warning::$src attempt $attempt: $(tail -n 1 "$log")"
     sleep $((attempt * 20))
   done
-  rm -f "$log"
+  rm -rf "$log" ${stage:+"$stage"}
   printf 'FAIL\t%s\t%s\n' "$src" "$dst" >> results.tsv
 }
 

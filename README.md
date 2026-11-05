@@ -20,7 +20,9 @@ benchmarks (SWE-bench Verified, SWE-bench Multilingual, SWE-Bench Pro V2: 1442 i
 - `push.sh` / `.github/workflows/push.yml`: 40 jobs (20 at a time, 8 images at once per job) copy
   their share with `crane copy --platform linux/amd64`; images already mirrored are skipped, so
   re-running the workflow only fills gaps. Anonymous Docker Hub pulls are tried first, the account
-  login on retries.
+  login on retries. Images of other registries are pulled to the runner's disk (`/mnt/stage`) and
+  pushed from there: streamed directly, ghcr.io dropped the downloads stalled by the slow upload
+  to ACR, and almost every ghcr.io copy failed.
 - A job stops starting copies after 300 minutes (its limit is 350). When a full run leaves gaps
   (failed copies or rows left at the budget), its `next-round` job dispatches the workflow again
   with `round` + 1, at most 8 rounds; a manual cancel stops the chain.
